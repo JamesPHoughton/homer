@@ -19,5 +19,6 @@ class TestClusterer(unittest.TestCase):
         w_el = dd.read_csv('resources/weighted_edgelist_sample.txt',
                            sep=' ', names=['W1', 'W2', 'Count'])
         clusters = traverse_thresholds(w_el)
+        clusters.compute()
         self.assertIn('k', clusters.columns)
         self.assertIn('Set', clusters.columns)

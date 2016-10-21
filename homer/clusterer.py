@@ -15,6 +15,7 @@ import os
 import shutil
 import tempfile
 import dask.dataframe as dd
+from dask import delayed
 
 TOOLS_DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -39,18 +40,27 @@ def find_clusters(unweighted_edge_list):
     -------
     pandas DataFrame
     """
-    # repartition to be in one partition
-    df = unweighted_edge_list.repartition(npartitions=1)
-
     # create a working directory
     with TemporaryDirectory() as dir_name:
 
-        # write the unweighted edgelist to a file
-        glob_filename = 'unweighted_edge_list.*.txt'
-        edgelist_filename = glob_filename.replace('*', '0')
+        if isinstance(unweighted_edge_list, dd.DataFrame):
+            # repartition to be in one partition
+            df = unweighted_edge_list.repartition(npartitions=1)
 
-        df.to_csv(dir_name + '/' + glob_filename, sep=' ',
-                  index=False, header=False, encoding='utf-8')
+            # write the unweighted edgelist to a file
+            glob_filename = 'unweighted_edge_list.*.txt'
+            edgelist_filename = glob_filename.replace('*', '0')
+
+            df.to_csv(dir_name + '/' + glob_filename, sep=' ',
+                      index=False, header=False, encoding='utf-8')
+
+        elif isinstance(unweighted_edge_list, pd.DataFrame):
+            df = unweighted_edge_list
+
+            edgelist_filename = 'unweighted_edge_list.txt'
+            df.to_csv(dir_name + '/' + edgelist_filename, sep=' ',
+                      index=False, header=False, encoding='utf-8')
+
 
         # run .mcliques
         # for each output file, run cosparallel
@@ -71,16 +81,20 @@ def find_clusters(unweighted_edge_list):
         # read the community files
         community_files = glob.glob(dir_name+'/[0-9]*_communities.txt')
 
-        cluster_list = list()
+        if len(community_files) > 0:
+            cluster_list = list()
 
-        for infile in community_files:
-            k = int(os.path.basename(infile).rstrip('_communities.txt'))
-            clusters = read_COS_output_file(infile, mapping)
-            df = pd.DataFrame(pd.Series(clusters), columns=['Set'])
-            df['k'] = k
-            cluster_list.append(df)
+            for infile in community_files:
+                k = int(os.path.basename(infile).rstrip('_communities.txt'))
+                clusters = read_COS_output_file(infile, mapping)
+                df = pd.DataFrame(pd.Series(clusters), columns=['Set'])
+                df['k'] = k
+                cluster_list.append(df)
 
-    clusters = pd.concat(cluster_list)
+            clusters = pd.concat(cluster_list)
+        else:
+            clusters = pd.DataFrame(columns=['Set', 'k'])
+
     return clusters
 
 
@@ -113,27 +127,6 @@ def read_COS_output_file(infile_name, mapping):
     return clusters
 
 
-def iter_thresholds(df, threshold_column):
-    """
-    Provides an iterator over subsets of the DataFrame where the threshold column is above
-    a particular value. Iterates through all possible values of the threshold column,
-    in arbitrary order.
-
-    Parameters
-    ----------
-    df: pandas or dask DataFrame
-    threshold_column: basestring
-        The name of the dataframe column to be used for selecting based upon thresholds
-
-    Returns
-    -------
-        An iterator yielding DataFrames where every value of the threshold column
-        is above a certain value
-    """
-    for threshold in df[threshold_column].unique():
-        yield threshold, df[df[threshold_column] >= threshold]
-
-
 def traverse_thresholds(weighted_edge_list):
     """
     The information we have from the network contains not just structure,
@@ -155,14 +148,18 @@ def traverse_thresholds(weighted_edge_list):
     -------
 
     """
-    # Todo: want to do this with dask, return a dask dataframe
-
+    thresholds = weighted_edge_list['Count'].unique()
     clusters_collector = []
-    for threshold, uw_el in iter_thresholds(weighted_edge_list, 'Count'):
-        t_clusters = find_clusters(uw_el)
-        t_clusters['threshold'] = threshold
-        clusters_collector.append(t_clusters)
+    for i, t in thresholds.iteritems():
+        cluster = delayed(find_clusters_over_threshold)(weighted_edge_list, t)
+        clusters_collector.append(cluster)
 
-    clusters = dd.concat(clusters_collector)
+    clusters = dd.from_delayed(clusters_collector)
     return clusters
 
+
+def find_clusters_over_threshold(weighted_edge_list, threshold):
+    uw_el = weighted_edge_list[weighted_edge_list['Count'] >= threshold]
+    clusters = find_clusters(uw_el)
+    clusters['threshold'] = threshold
+    return clusters

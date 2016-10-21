@@ -14,7 +14,7 @@ import pandas as pd
 import os
 import shutil
 import tempfile
-import dask
+import dask.dataframe as dd
 
 TOOLS_DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -28,25 +28,25 @@ class TemporaryDirectory(object):
         shutil.rmtree(self.name)
 
 
-def find_cliques(unweighted_edgelist):
+def find_clusters(unweighted_edge_list):
     """
-    Uses COSparallel to identify new cliques from an unweighted edgelist
+    Uses COSparallel to identify new clusters from an unweighted edgelist
     Parameters
     ----------
-    unweighted_edgelist: dask (or pandas) dataframe with columns 'W1' and 'W2'
+    unweighted_edge_list: dask (or pandas) dataframe with columns 'W1' and 'W2'
 
     Returns
     -------
-    list of dicts [{'k':5, 'clique':{'hi', 'james', ...}}, ...]
+    pandas DataFrame
     """
     # repartition to be in one partition
-    df = unweighted_edgelist.repartition(npartitions=1)
+    df = unweighted_edge_list.repartition(npartitions=1)
 
     # create a working directory
     with TemporaryDirectory() as dir_name:
 
         # write the unweighted edgelist to a file
-        glob_filename = 'unweighted_edgelist.*.txt'
+        glob_filename = 'unweighted_edge_list.*.txt'
         edgelist_filename = glob_filename.replace('*', '0')
 
         df.to_csv(dir_name + '/' + glob_filename, sep=' ',
@@ -54,11 +54,13 @@ def find_cliques(unweighted_edgelist):
 
         # run .mcliques
         # for each output file, run cosparallel
-        cmds = ['cd ' + dir_name,
-                TOOLS_DIR + '/./maximal_cliques ' + edgelist_filename,
-                TOOLS_DIR + '/./cos ' + edgelist_filename + '.mcliques']
+        cmds = ['cd %s' % dir_name,
+                '%s/./maximal_cliques %s' % (TOOLS_DIR.replace(' ', '\ '),  # there must be better ways to escape spaces
+                                             edgelist_filename.replace(' ', '\ ')),
+                '%s/./cos %s.mcliques' % (TOOLS_DIR.replace(' ', '\ '),
+                                          edgelist_filename.replace(' ', '\ '))]
 
-        response = subprocess.check_output('; '.join(cmds), shell=True)
+        response = subprocess.check_output(r'; '.join(cmds), shell=True)
 
         # read the mapping file created by 'maximal_cliques'
         map_filename = glob.glob(dir_name + '/*.map')
@@ -78,7 +80,8 @@ def find_cliques(unweighted_edgelist):
             df['k'] = k
             cluster_list.append(df)
 
-    return pd.concat(cluster_list)
+    clusters = pd.concat(cluster_list)
+    return clusters
 
 
 def read_COS_output_file(infile_name, mapping):
@@ -109,11 +112,12 @@ def read_COS_output_file(infile_name, mapping):
                 clusters[name].add(word)
     return clusters
 
+
 def iter_thresholds(df, threshold_column):
     """
     Provides an iterator over subsets of the DataFrame where the threshold column is above
     a particular value. Iterates through all possible values of the threshold column,
-    in increasing order.
+    in arbitrary order.
 
     Parameters
     ----------
@@ -126,10 +130,11 @@ def iter_thresholds(df, threshold_column):
         An iterator yielding DataFrames where every value of the threshold column
         is above a certain value
     """
-    for threshold in df[threshold_column].unique().sort():
-        yield df[df[threshold_column] >= threshold]
+    for threshold in df[threshold_column].unique():
+        yield threshold, df[df[threshold_column] >= threshold]
 
-def traverse_thresholds(weighted_edgelist):
+
+def traverse_thresholds(weighted_edge_list):
     """
     The information we have from the network contains not just structure,
     but weights. These weights tell us how frequently individuals recognize
@@ -141,7 +146,7 @@ def traverse_thresholds(weighted_edgelist):
 
     Parameters
     ----------
-    weighted_edgelist: dask DataFrame
+    weighted_edge_list: dask DataFrame
         with columns:
         - `W1`, `W2`: The words that an edge is between
         - `Count`: the weight of the edge
@@ -150,8 +155,14 @@ def traverse_thresholds(weighted_edgelist):
     -------
 
     """
-    w_el = weighted_edgelist
+    # Todo: want to do this with dask, return a dask dataframe
 
-    for i in range(w_el['Count'].max())
-        uw_el = w_el[w_el['Count'] > 5][['W1', 'W2']].values  # unweighted edgelist
-        find_cliques(uw_el)
+    clusters_collector = []
+    for threshold, uw_el in iter_thresholds(weighted_edge_list, 'Count'):
+        t_clusters = find_clusters(uw_el)
+        t_clusters['threshold'] = threshold
+        clusters_collector.append(t_clusters)
+
+    clusters = dd.concat(clusters_collector)
+    return clusters
+

@@ -68,6 +68,7 @@ def parse_tw_file(tw_files):
     dicts = frequencies.map(
         lambda x: {'Date': x[0][0], 'W1': x[0][1], 'W2': x[0][2], 'Count': x[1]})
     df = dicts.to_dataframe()
+    return df
 
 
 

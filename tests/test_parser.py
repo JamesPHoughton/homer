@@ -17,17 +17,8 @@ class TestFileParsing(unittest.TestCase):
 
     def test_parse_tw_file(self):
         """basic functionality """
-        from homer.parser import parse_tw_file
+        from homer.parser import get_weighted_edgelist
 
-        df = parse_tw_file('resources/testfile.txt')
+        df = get_weighted_edgelist('resources/testfile.txt')
         self.assertIsInstance(df, dask.dataframe.DataFrame)
-
-    def test_parse_tw_file(self):
-        """basic functionality """
-        from homer.parser import parse_tw_file
-
-        df = parse_tw_file('resources/testfile_1000.txt')
-
-        self.assertIsInstance(df, dask.dataframe.DataFrame)
-
 

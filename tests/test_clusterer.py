@@ -15,10 +15,12 @@ class TestClusterer(unittest.TestCase):
         self.assertIn('Set', clusters.columns)
 
     def test_traverse_thresholds(self):
-        from homer.clusterer import traverse_thresholds
+        from homer.clusterer import find_clusters_for_any_threshold
         w_el = dd.read_csv('resources/weighted_edgelist_sample.txt',
                            sep=' ', names=['W1', 'W2', 'Count'])
-        clusters = traverse_thresholds(w_el)
+        clusters = find_clusters_for_any_threshold(w_el)
         clusters.compute()
         self.assertIn('k', clusters.columns)
         self.assertIn('Set', clusters.columns)
+
+

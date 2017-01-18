@@ -1,5 +1,6 @@
 
 import dask.bag as db
+import glob
 
 import json
 from itertools import combinations
@@ -10,9 +11,9 @@ from nltk.corpus import stopwords
 tw_stopwords = stopwords.words() + ['rt', '@']
 
 
-def get_word_cooccurrences(json_message):
+def get_message_cooccurences(json_message, hashtags_only=False):
     """
-    Identifies word combinations in a single message.
+    Identifies word combinations in a single twitter message.
     Drops stopwords and punctuation.
 
     Parameters
@@ -26,6 +27,8 @@ def get_word_cooccurrences(json_message):
         each tuple contains the date and two words (in alphabetical order) of a pair
 
     """
+
+    # todo: make the hashtags_only parameter operable
     try:
         parsed_json = json.loads(json_message)
         text = parsed_json['text'].lower()
@@ -50,7 +53,7 @@ def get_word_cooccurrences(json_message):
     return sets
 
 
-def parse_tw_file(tw_files):
+def get_weighted_edgelist(tw_files, hashtags_only=False):
     """
 
     Parameters
@@ -60,16 +63,31 @@ def parse_tw_file(tw_files):
 
     Returns
     -------
+    df: dask dataframe
+        weighted edgelist, columns ['Date', 'W1', 'W2', 'Count']
 
     """
 
-    cooccurrences = db.read_text(tw_files).map(get_word_cooccurrences).concat()
-    frequencies = cooccurrences.frequencies()
+    cooccurences = db.read_text(tw_files).map(get_message_cooccurences).concat()
+    frequencies = cooccurences.frequencies()
     dicts = frequencies.map(
-        lambda x: {'Date': x[0][0], 'W1': x[0][1], 'W2': x[0][2], 'Count': x[1]})
+        lambda x: {'Date': int(x[0][0]),
+                   'W1': str(x[0][1]),
+                   'W2': str(x[0][2]),
+                   'Count': int(x[1])})
     df = dicts.to_dataframe()
     return df
 
+
+def build_weighted_edgelist_db(tw_file_globstring,
+                               output_globstring,
+                               hashtags_only=False):
+    files = glob.glob(tw_file_globstring)  # 'tests/resources/testfile*.gz'
+    weighted_edgelist = get_weighted_edgelist(files,
+                                              hashtags_only=hashtags_only)
+
+    weighted_edgelist.to_hdf(output_globstring, '/weighted_edge_list', dropna=True)  # 'working/testdb_*.hdf'
+    return weighted_edgelist
 
 
 

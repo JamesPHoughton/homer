@@ -17,6 +17,7 @@ import dask.dataframe as dd
 from dask import delayed
 import numpy as np
 
+
 TOOLS_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
@@ -159,6 +160,7 @@ def find_clusters_for_any_threshold(weighted_edge_list, min_threshold=1):
     clusters: dask DataFrame
 
     """
+    #todo: this might be reasonable to sort in k order?
     thresholds = weighted_edge_list['Count'].unique()
     clusters_collector = []
     for t in np.array(thresholds):
@@ -215,10 +217,11 @@ def build_cluster_db(weighted_edge_list,
             df_2 = df.assign(Date=date)
             df_3 = df_2.assign(ID=df_2.apply(lambda x: hash(tuple(x)), axis=1,
                                              columns='hash'))
+            df_4 = df_3.set_index('ID')
 
-            collector.append(df_3)
+            collector.append(df_4)
 
-    clusters = dd.concat(collector)
+    clusters = dd.concat(collector, interleave_partitions=True)
     clusters = clusters.repartition(npartitions=1)  # Todo: This partitioning is problematic
 
     clusters.to_hdf(output_globstring, '/clusters', dropna=True)

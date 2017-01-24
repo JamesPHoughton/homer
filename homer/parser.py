@@ -7,8 +7,16 @@ from itertools import combinations
 import re
 import dateutil.parser
 from nltk.tokenize import RegexpTokenizer
-from nltk.corpus import stopwords
-tw_stopwords = stopwords.words() + ['rt', '@']
+
+
+import os
+import pickle
+
+__location__ = os.path.realpath(
+    os.path.join(os.getcwd(), os.path.dirname(__file__)))
+
+sw_file = os.path.join(__location__, "stopwords.pickle")
+tw_stopwords = pickle.load(open(sw_file, "rb"))
 
 
 def get_message_cooccurences(json_message, hashtags_only=False):

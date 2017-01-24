@@ -1,4 +1,8 @@
-def build_relatives_db(clusters):
+import numpy as np
+import pandas as pd
+
+
+def build_relations_db(clusters, output_globstring):
     """
     Identifies children (ie, completely contained clusters)
 
@@ -14,8 +18,14 @@ def build_relatives_db(clusters):
 
     """
 
-    # Split by timeperiod
+    # find k-children
+    day_th_groups = clusters.groupby(['Date', 'threshold'])
+    children = day_th_groups.apply(find_k_children, meta=pd.DataFrame(columns=['children']))
 
+    relations = children
+
+    #relations.to_hdf(output_globstring, '/relations', dropna=True)
+    return relations
 
 
 def find_k_children(clusters):
@@ -26,23 +36,36 @@ def find_k_children(clusters):
     and are completely contained within the parent cluster
     and share the same threshold?
 
-    Adds a column to the dataframe which is a list of cluster ids
-
     This corresponds to components of the conversation with closer semantic
     connectivity, but the same level of popularity.
 
     Parameters
     ----------
-    clusters
+    clusters: dataframe
 
     Returns
     -------
+    children_df: pandas dataframe
+        Index is the ID of the parent
+        'children' column contains a list of the ids of next generation children.
 
     """
-    # split by threshold (do independent analyses, perhaps in parallel)
+    collector = []
+    for k in sorted(np.array(clusters.k.unique()))[:-1]:
+        parents = clusters[clusters.k == k]
+        child_candidates = clusters[clusters.k == k + 1]
+        for parent_id, parent in parents.iterrows():
+            parent_set = set(parent['Set'].split(' '))
+            children = [child_id for child_id, child in child_candidates.iterrows() if
+                        set(child['Set'].split(' ')) < parent_set]
+            collector.append({'ID': parent_id,
+                              'children': children})
 
-    # split by k, look for children in higher k
-    raise NotImplementedError
+    children_df = pd.DataFrame(collector, columns=['ID', 'children'])
+    # include col names to account for empty case
+    children_df.set_index('ID', inplace=True)
+    return children_df
+
 
 def find_k_parents(children):
     """
@@ -63,6 +86,7 @@ def find_k_parents(children):
     """
     raise NotImplementedError
 
+
 def find_t_children(clusters):
     """
     finds clusters which are completely contained within the parent cluster
@@ -82,7 +106,10 @@ def find_t_children(clusters):
 
     """
 
+
 def find_t_parents(t_children):
     raise NotImplementedError
 
-def find_overlapping(clusters)
+
+def find_overlapping(clusters):
+    raise NotImplementedError

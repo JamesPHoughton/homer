@@ -14,6 +14,11 @@ class TestHomer(unittest.TestCase):
         head = clusters.head()
         repr(head)
 
+    def test_get_clusters_by_keyword_restricts_dates(self):
+        """I've seen a few cases in which the clusters are returned outside
+        of the date ranges. Need to check this behavior."""
+        self.fail()
+
 
 class TestNewCollection(unittest.TestCase):
     def test_builds(self):

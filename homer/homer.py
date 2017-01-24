@@ -1,5 +1,6 @@
 from . import clusterer
 from . import parser
+from . import relate
 import dask.dataframe as dd
 
 
@@ -45,22 +46,55 @@ def new_collection(tw_file_globstring,
 
 class Homer(object):
     """
+
+
     This object maintains a connection to the database
     and provides methods for accessing clusters and components
 
     The object can be created by linking it to an existing store of
     processed data, or by
+
+
+
     """
 
     def __init__(self,
                  weighted_edge_list_globstring=None,
-                 clusters_globstring=None):
+                 clusters_globstring=None,
+                 relations_globstring=None):
+        """
+
+        Parameters
+        ----------
+        weighted_edge_list_globstring
+
+        clusters_globstring (optional)
+
+        you need at least one of these to be able to do anything, though.
+
+        """
         if weighted_edge_list_globstring is not None:
             self.weighted_edge_list = dd.read_hdf(weighted_edge_list_globstring,
                                                   '/weighted_edge_list')
 
         if clusters_globstring is not None:
             self.clusters = dd.read_hdf(clusters_globstring, '/clusters')
+
+        if relations_globstring is not None:
+            self.relations = dd.read_hdf(relations_globstring, '/relations')
+
+    def compute_clusters(self, clusters_globstring, min_threshold):
+        self.clusters = clusterer.build_cluster_db(
+            self.weighted_edge_list,
+            output_globstring=clusters_globstring,
+            min_threshold=min_threshold
+        )
+
+    def compute_relations(self, relations_globstring):
+        self.relations = relate.build_relations_db(
+            clusters=self.clusters,
+            output_globstring=relations_globstring
+        )
 
     def get_clusters_by_keyword(self,
                                 keywords=None,
@@ -88,7 +122,6 @@ class Homer(object):
 
         return selection
 
-
     def get_child_clusters(self, cluster_ids, generations=1):
         """
         For a given cluster or set of clusters
@@ -103,4 +136,17 @@ class Homer(object):
 
         """
         raise NotImplementedError
+
+    def draw_nested_sets(self, cluster_ids, depth=-1):
+        """
+
+        Parameters
+        ----------
+        cluster_ids
+        depth
+
+        Returns
+        -------
+
+        """
 

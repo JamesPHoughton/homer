@@ -1,6 +1,7 @@
 from . import clusterer
 from . import parser
 from . import relate
+from . import tree
 import dask.dataframe as dd
 
 
@@ -95,6 +96,40 @@ class Homer(object):
             clusters=self.clusters,
             output_globstring=relations_globstring
         )
+
+    def compute_tree(self):
+        # put clusters in a tree
+        root = tree.Cluster('__root__')
+        for ID, row in self.clusters.iterrows():
+            new = tree.Cluster(contents=str(ID),
+                          k=row['k'],
+                          w=row['threshold'],
+                          date=row['Date'])
+
+            root.insert(new)
+            if row['k'] == 3:
+                root.k_children.append(new)
+
+        # add clusters as children
+        for (_, _, ID), row in self.relations.iterrows():
+            node = root.find(str(ID))
+            for child in row['children']:
+                node.k_children.append(root.find(str(child)))
+
+        # add leaves (words)
+        for node in tree.walk_k_ancestry(root, 'bottom up'):
+            if node.contents != '__root__':
+                present_in_children = [m.contents for m in node.get_k_members()]
+                words = self.clusters['Set'].loc[int(node.contents)].compute().values[0].split(
+                    ' ')
+                for leaf_word in list(set(words) - set(present_in_children)):
+                    leaf = root.find(leaf_word)
+                    if leaf is None:
+                        leaf = tree.Cluster(leaf_word, is_leaf=True)
+                        root.insert(leaf)
+                    node.k_children.append(leaf)
+
+        self.tree = root
 
     def get_clusters_by_keyword(self,
                                 keywords=None,

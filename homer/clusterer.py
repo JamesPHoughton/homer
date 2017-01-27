@@ -215,15 +215,17 @@ def build_cluster_db(weighted_edge_list,
 
         if df.ndim > 0:
             df_2 = df.assign(Date=date)
-            df_3 = df_2.assign(ID=df_2.apply(lambda x: hash(tuple(x)), axis=1,
-                                             columns='hash'))
-            df_4 = df_3.set_index('ID')
+            #df_3 = df_2.assign(ID=df_2.apply(lambda x: hash(tuple(x)), axis=1,
+            #                                 columns='hash'))
+            #df_4 = df_3.set_index('ID')
 
-            collector.append(df_4)
+            #collector.append(df_4)
+            collector.append(df_2)
 
     clusters = dd.concat(collector, interleave_partitions=True)
     clusters = clusters.repartition(npartitions=1)  # Todo: This partitioning is problematic
-
+    clusters = clusters.reset_index(drop=True) #Todo: need to set an index which is unlikely to
+    # also be a word in a cluster.
     clusters.to_hdf(output_globstring, '/clusters', dropna=True)
 
     return clusters

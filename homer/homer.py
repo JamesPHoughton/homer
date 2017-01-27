@@ -3,6 +3,8 @@ from . import parser
 from . import relate
 from . import tree
 import dask.dataframe as dd
+import gzip
+import json
 
 
 def new_collection(tw_file_globstring,
@@ -62,7 +64,8 @@ class Homer(object):
     def __init__(self,
                  weighted_edge_list_globstring=None,
                  clusters_globstring=None,
-                 relations_globstring=None):
+                 relations_globstring=None,
+                 tree_filename=None):
         """
 
         Parameters
@@ -84,6 +87,9 @@ class Homer(object):
         if relations_globstring is not None:
             self.relations = dd.read_hdf(relations_globstring, '/relations')
 
+        if tree_filename is not None:
+            self.tree = tree.load_tree(tree_filename)
+
     def compute_clusters(self, clusters_globstring, min_threshold):
         self.clusters = clusterer.build_cluster_db(
             self.weighted_edge_list,
@@ -97,39 +103,12 @@ class Homer(object):
             output_globstring=relations_globstring
         )
 
-    def compute_tree(self):
-        # put clusters in a tree
-        root = tree.Cluster('__root__')
-        for ID, row in self.clusters.iterrows():
-            new = tree.Cluster(contents=str(ID),
-                          k=row['k'],
-                          w=row['threshold'],
-                          date=row['Date'])
-
-            root.insert(new)
-            if row['k'] == 3:
-                root.k_children.append(new)
-
-        # add clusters as children
-        for (_, _, ID), row in self.relations.iterrows():
-            node = root.find(str(ID))
-            for child in row['children']:
-                node.k_children.append(root.find(str(child)))
-
-        # add leaves (words)
-        for node in tree.walk_k_ancestry(root, 'bottom up'):
-            if node.contents != '__root__':
-                present_in_children = [m.contents for m in node.get_k_members()]
-                words = self.clusters['Set'].loc[int(node.contents)].compute().values[0].split(
-                    ' ')
-                for leaf_word in list(set(words) - set(present_in_children)):
-                    leaf = root.find(leaf_word)
-                    if leaf is None:
-                        leaf = tree.Cluster(leaf_word, is_leaf=True)
-                        root.insert(leaf)
-                    node.k_children.append(leaf)
-
-        self.tree = root
+    def compute_tree(self, tree_filename):
+        self.tree = tree.compute_tree(
+            clusters=self.clusters,
+            relations=self.relations,
+            tree_filename=tree_filename
+        )
 
     def get_clusters_by_keyword(self,
                                 keywords=None,

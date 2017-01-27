@@ -1,5 +1,7 @@
+import json
+import gzip
 import matplotlib.pylab as plt
-import itertools
+import numpy as np
 
 
 class Cluster(object):
@@ -28,10 +30,9 @@ class Cluster(object):
         self.left = None
         self.right = None
 
-        self.bottom = 0
-        self.center = 0
         self.pts_buffer = 4
         self.height = None
+        self.child_bottoms = None
         self.width = None
         self.image_text = None
 
@@ -78,74 +79,54 @@ class Cluster(object):
                 for m in n.get_k_members():
                     yield m
 
+    def to_json(self):
+        """Uses abbreviated field names to shrink file sizes"""
+        return json.dumps({
+            'cn': str(self.contents),
+            'k': self.k,
+            'w': self.w,
+            'dt': self.date,
+            'kch': [str(ch) for ch in self.k_children],
+            'lf': self.is_leaf
+        })
 
     # ###### Drawing Functions ######
     text_properties = {'size': 12,
                        'fontname': 'sans-serif',
                        'horizontalalignment': 'center'}
 
-    def set_height(self, ax):
-        if self.is_leaf:
-            # have to mockup the actual image to get the width
-            self.image_text = ax.text(0, 0, self.contents, **self.text_properties)
-            plt.draw()
-            extent = self.image_text.get_window_extent()
-            self.height = extent.y1 - extent.y0
-        else:
-            self.height = (sum([x.set_height(ax) for x in self.k_children]) +
-                           (len(self.k_children) + 1) * self.pts_buffer)
-        return self.height
+    def compute_size(self):
+        if self.height is None or self.width is None:
+            if self.is_leaf:
+                f = plt.figure()
+                r = f.canvas.get_renderer()
+                t = plt.text(0.5, 0.5, self.contents, **self.text_properties)
 
-    def set_width(self, ax):
-        if self.is_leaf:
-            # have to mockup the actual image to get the width
-            self.image_text = ax.text(0, 0, self.contents,
-                                      transform=None, **self.text_properties)
-            plt.draw()
-            extent = self.image_text.get_window_extent()
-            self.width = extent.x1 - extent.x0 + self.pts_buffer
-        else:
-            self.width = (max([x.set_width(ax) for x in self.k_children]) +
-                          2 * self.pts_buffer)
-        return self.width
+                bb = t.get_window_extent(renderer=r)
+                self.width = bb.width
+                self.height = bb.height
+                plt.close()
 
-    def set_center(self, x):
-        if not self.is_leaf:
-            [child.set_center(x) for child in self.k_children]
-        self.center = x
+            else:
+                heights, widths = zip(*[x.compute_size() for x in self.k_children])
+                self.height = sum(heights) + self.pts_buffer
+                self.width = max(widths) + 2 * self.pts_buffer
+                self.child_bottoms = np.cumsum([self.pts_buffer] + list(heights[:-1]))
 
-    def set_bottom(self, bottom=0):
-        """Sets the bottom of the box.
-        recursively sets the bottoms of the contents appropriately"""
-        self.bottom = bottom + self.pts_buffer
+        return self.height, self.width
 
-        if not self.is_leaf:
-            cum_height = self.bottom
-            for element in self.k_children:
-                element.set_bottom(cum_height)
-                cum_height += element.height + self.pts_buffer
-
-    def layout(self, ax):
-        if not self.is_leaf:
-            [child.layout(ax) for child in self.k_children]
-
-        plt.box('off')
-        self.set_width(ax)
-        self.set_height(ax)
-        ax.clear()
-
-    def draw(self, ax):
-        if not hasattr(self, 'width'):
-            raise AttributeError(
-                'Must run `layout` method before drawing, preferably with dummy axis')
+    def draw(self, ax, center, bottom):
+        if self.height is None or self.width is None or self.child_bottoms is None:
+            self.compute_size()
 
         if self.is_leaf:
-            self.image_text = ax.text(self.center, self.bottom, self.contents,
+            self.image_text = ax.text(center, bottom, self.contents,
                                       transform=None, **self.text_properties)
         else:
-            [child.draw(ax) for child in self.k_children]
-            ax.add_patch(plt.Rectangle((self.center - .5 * self.width, self.bottom),
-                                       self.width, self.height,
+            [child.draw(ax, center, bottom + child_bottom)
+             for child, child_bottom in zip(self.k_children, self.child_bottoms)]
+            ax.add_patch(plt.Rectangle((center - .5 * self.width, bottom),
+                                       self.width, self.height-self.pts_buffer/2,
                                        alpha=.1, transform=None))
         ax.set_axis_off()
 
@@ -163,6 +144,26 @@ def apply_to_tree(node, f, how='center'):
         f(node)
 
 
+def walk_tree(tree, how='infix'):
+    if tree is None:
+        return None
+
+    if how is 'prefix':
+        yield tree
+
+    for elem in walk_tree(tree.left, how):
+        yield elem
+
+    if how is 'infix':
+        yield tree
+
+    for elem in walk_tree(tree.right, how):
+        yield elem
+
+    if how is 'postfix':
+        yield tree
+
+
 def walk_k_ancestry(tree, order='bottom up'):
     if order == 'top down':
         yield tree
@@ -176,3 +177,62 @@ def walk_k_ancestry(tree, order='bottom up'):
 
     if order not in ['top down', 'bottom up']:
         raise ValueError('Bad Value for "order"')
+
+
+def compute_tree(clusters, relations, tree_filename):
+    # put clusters in a tree
+    root = Cluster('__root__')
+    for ID, row in clusters.iterrows():
+        new = Cluster(contents=str(ID),
+                      k=row['k'],
+                      w=row['threshold'],
+                      date=row['Date'])
+
+        root.insert(new)
+        if row['k'] == 3:
+            root.k_children.append(new)
+
+    # add clusters as children
+    for (_, _, ID), row in relations.iterrows():
+        node = root.find(str(ID))
+        for child in row['children']:
+            node.k_children.append(root.find(str(child)))
+
+    # add leaves (words)
+    for node in walk_k_ancestry(root, 'bottom up'):
+        if node.contents != '__root__':
+            present_in_children = [m.contents for m in node.get_k_members()]
+            words = clusters['Set'].loc[int(node.contents)].compute().values[0].split(
+                ' ')
+            for leaf_word in list(set(words) - set(present_in_children)):
+                leaf = root.find(leaf_word)
+                if leaf is None:
+                    leaf = Cluster(leaf_word, is_leaf=True)
+                    root.insert(leaf)
+                node.k_children.append(leaf)
+
+    with gzip.open(tree_filename, 'wb') as f:
+        for node in walk_tree(root):
+            f.write(node.to_json().encode())
+
+    return root
+
+
+def load_tree(tree_filename):
+    with gzip.open(tree_filename, 'rb') as f:
+        line = f.readline()
+        info = json.loads(line.decode())
+        root = Cluster(contents=info['cn'], k=info['k'],
+                       w=info['w'], date=info['dt'], is_leaf=info['lf'])
+        root.k_children = info['kch']
+        for line in f:
+            info = json.loads(line.decode())
+            node = Cluster(contents=info['cn'], k=info['k'],
+                           w=info['w'], date=info['dt'], is_leaf=info['lf'])
+            node.k_children = info['kch']
+            root.insert(node)
+
+    for node in walk_tree(root):
+        node.k_children = [root.find(x) for x in node.k_children]
+
+    return root

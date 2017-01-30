@@ -1,7 +1,6 @@
 import unittest
 
 import matplotlib
-#matplotlib.use('tkagg')
 matplotlib.use('Agg')
 import matplotlib.pylab as plt
 

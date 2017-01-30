@@ -179,7 +179,6 @@ def find_clusters_over_threshold(weighted_edge_list, threshold):
     in the dataset.
 
     """
-
     uw_el = weighted_edge_list[weighted_edge_list['Count'] >= threshold]
     clusters = find_clusters(uw_el[['W1', 'W2']])
     clusters['threshold'] = threshold
@@ -188,8 +187,7 @@ def find_clusters_over_threshold(weighted_edge_list, threshold):
 
 def build_cluster_db(weighted_edge_list,
                      output_globstring,
-                     min_threshold=1,
-                     hashtags_only=False):
+                     min_threshold=1):
     """
     need to separate by date, then get the clusters dataframe, then add
     the date parameter, then create a unique id by hashing the data, then
@@ -215,11 +213,6 @@ def build_cluster_db(weighted_edge_list,
 
         if df.ndim > 0:
             df_2 = df.assign(Date=date)
-            #df_3 = df_2.assign(ID=df_2.apply(lambda x: hash(tuple(x)), axis=1,
-            #                                 columns='hash'))
-            #df_4 = df_3.set_index('ID')
-
-            #collector.append(df_4)
             collector.append(df_2)
 
     clusters = dd.concat(collector, interleave_partitions=True)
@@ -230,3 +223,35 @@ def build_cluster_db(weighted_edge_list,
 
     return clusters
 
+
+def build_transition_cluster_db(weighted_edge_list,
+                                output_globstring,
+                                min_threshold=1):
+
+    """ Identifies clusters formed from edgelists representing
+    two consecutive days, returning the clusters that are formed
+    from the intersection of those days conversations.
+
+    This is to facilitate identifying how clusters from one day continue
+    into the next day.
+    """
+
+    collector = []
+    dates = np.array(weighted_edge_list.Date.unique())
+
+    for d1, d2 in zip(dates[:-1], dates[1:]):
+        selection = weighted_edge_list[int(d1) <= weighted_edge_list.Date <= int(d2)]
+        df = find_clusters_for_any_threshold(selection,
+                                             min_threshold=min_threshold)
+
+        if df.ndim > 0:
+            df_2 = df.assign(Date_1=d1).assign(Date_2=d2)
+            collector.append(df_2)
+
+    clusters = dd.concat(collector, interleave_partitions=True)
+    clusters = clusters.repartition(npartitions=1)  # Todo: This partitioning is problematic
+    clusters = clusters.reset_index(drop=True)  # Todo: need to set an index which is unlikely to
+    # also be a word in a cluster.
+    clusters.to_hdf(output_globstring, '/transition_clusters', dropna=True)
+
+    return clusters

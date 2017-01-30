@@ -10,7 +10,9 @@ class Cluster(object):
                  k=None,
                  w=None,
                  date=None,
-                 is_leaf=False):
+                 is_leaf=False,
+                 tomorrow=None,
+                 p_tomorrow=None):
         self.contents = contents
         self.k = k  # k-clique clustering parameter
         self.w = w  # threshold
@@ -18,13 +20,13 @@ class Cluster(object):
         self.is_leaf = is_leaf
 
         self.k_children = []
-        self.w_children = []
-        self.k_parents = []
-        self.t_parents = []
+        # self.w_children = []
+        # self.k_parents = []
+        # self.t_parents = []
         self.tomorrow = []
         self.p_tomorrow = []
-        self.yesterday = []
-        self.p_yesterday = []
+        # self.yesterday = []
+        # self.p_yesterday = []
         self.members = []
 
         self.left = None
@@ -34,7 +36,6 @@ class Cluster(object):
         self.height = None
         self.child_bottoms = None
         self.width = None
-        self.image_text = None
 
     def __repr__(self):
         return str(self.contents)
@@ -87,7 +88,9 @@ class Cluster(object):
             'w': self.w,
             'dt': self.date,
             'kch': [str(ch) for ch in self.k_children],
-            'lf': self.is_leaf
+            'lf': self.is_leaf,
+            'tm': [str(t) for t in self.tomorrow],
+            'ptm': [float(p) for p in self.p_tomorrow]
         })
 
     # ###### Drawing Functions ######
@@ -120,13 +123,13 @@ class Cluster(object):
             self.compute_size()
 
         if self.is_leaf:
-            self.image_text = ax.text(center, bottom, self.contents,
-                                      transform=None, **self.text_properties)
+            ax.text(center, bottom, self.contents,
+                    transform=None, **self.text_properties)
         else:
             [child.draw(ax, center, bottom + child_bottom)
              for child, child_bottom in zip(self.k_children, self.child_bottoms)]
             ax.add_patch(plt.Rectangle((center - .5 * self.width, bottom),
-                                       self.width, self.height-self.pts_buffer/2,
+                                       self.width, self.height - self.pts_buffer / 2,
                                        alpha=.1, transform=None))
         ax.set_axis_off()
 
@@ -179,7 +182,7 @@ def walk_k_ancestry(tree, order='bottom up'):
         raise ValueError('Bad Value for "order"')
 
 
-def compute_tree(clusters, relations, tree_filename):
+def compute_tree(clusters, relations, transitions, tree_filename):
     # put clusters in a tree
     root = Cluster('__root__')
     for ID, row in clusters.iterrows():
@@ -211,6 +214,13 @@ def compute_tree(clusters, relations, tree_filename):
                     root.insert(leaf)
                 node.k_children.append(leaf)
 
+    # add connections to subsequent day clusters
+    for i, (c1, c2, similarity) in transitions.iterrows():
+        n1 = root.find(str(int(c1)))
+        n2 = root.find(str(int(c2)))
+        n1.tomorrow.append(n2)
+        n1.p_tomorrow.append(similarity)
+
     with gzip.open(tree_filename, 'wb') as f:
         for node in walk_tree(root):
             f.write(node.to_json().encode())
@@ -230,6 +240,8 @@ def load_tree(tree_filename):
             node = Cluster(contents=info['cn'], k=info['k'],
                            w=info['w'], date=info['dt'], is_leaf=info['lf'])
             node.k_children = info['kch']
+            node.tomorrow = info['tm']
+            node.p_tomorrow = info['ptm']
             root.insert(node)
 
     for node in walk_tree(root):

@@ -2,9 +2,9 @@ from . import clusterer
 from . import parser
 from . import relate
 from . import tree
+from . import transition
 import dask.dataframe as dd
-import gzip
-import json
+import pandas as pd
 
 
 def new_collection(tw_file_globstring,
@@ -64,6 +64,8 @@ class Homer(object):
     def __init__(self,
                  weighted_edge_list_globstring=None,
                  clusters_globstring=None,
+                 transition_clusters_globstring=None,
+                 transitions_filename=None,
                  relations_globstring=None,
                  tree_filename=None):
         """
@@ -87,6 +89,13 @@ class Homer(object):
         if relations_globstring is not None:
             self.relations = dd.read_hdf(relations_globstring, '/relations')
 
+        if transition_clusters_globstring is not None:
+            self.transition_clusters = dd.read_hdf(transition_clusters_globstring,
+                                                   '/transition_clusters')
+
+        if transitions_filename is not None:
+            self.transitions = pd.read_pickle(transitions_filename)
+
         if tree_filename is not None:
             self.tree = tree.load_tree(tree_filename)
 
@@ -96,6 +105,22 @@ class Homer(object):
             output_globstring=clusters_globstring,
             min_threshold=min_threshold
         )
+
+    def compute_transition_clusters(self,
+                            transition_clusters_globstring,
+                            min_threshold):
+        self.transition_clusters = clusterer.build_transition_cluster_db(
+            weighted_edge_list=self.weighted_edge_list,
+            output_globstring=transition_clusters_globstring,
+            min_threshold=min_threshold
+        )
+
+    def compute_transition_list(self, transition_list_filename):
+        self.transitions = transition.compute_transition_list(
+            daily_clusters=self.clusters,
+            inter_day_clusters=self.transition_clusters
+        )
+        self.transitions.to_pickle(transition_list_filename)
 
     def compute_relations(self, relations_globstring):
         self.relations = relate.build_relations_db(
@@ -107,7 +132,8 @@ class Homer(object):
         self.tree = tree.compute_tree(
             clusters=self.clusters,
             relations=self.relations,
-            tree_filename=tree_filename
+            transitions=self.transitions,
+            tree_filename=tree_filename,
         )
 
     def get_clusters_by_keyword(self,

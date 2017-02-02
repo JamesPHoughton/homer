@@ -24,7 +24,7 @@ def build_relations_db(clusters, output_globstring):
 
     relations = children
 
-    #relations.to_hdf(output_globstring, '/relations', dropna=True)
+    relations.to_hdf(output_globstring, '/relations', dropna=True)
     return relations
 
 

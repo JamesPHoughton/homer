@@ -17,7 +17,6 @@ import dask.dataframe as dd
 from dask import delayed
 import numpy as np
 
-
 TOOLS_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
@@ -47,28 +46,30 @@ def find_clusters(unweighted_edge_list):
 
         if isinstance(unweighted_edge_list, dd.DataFrame):
             # repartition to be in one partition
-            df = unweighted_edge_list.repartition(npartitions=1)
+            uw_el = unweighted_edge_list.repartition(npartitions=1)
 
             # write the unweighted edgelist to a file
             glob_filename = 'unweighted_edge_list.*.txt'
             edgelist_filename = glob_filename.replace('*', '0')
 
-            df.to_csv(dir_name + '/' + glob_filename, sep=' ',
-                      index=False, header=False, encoding='utf-8')
+            uw_el.to_csv(dir_name + '/' + glob_filename, sep=' ',
+                         index=False, header=False, encoding='utf-8')
 
         elif isinstance(unweighted_edge_list, pd.DataFrame):
-            df = unweighted_edge_list
+            uw_el = unweighted_edge_list
 
             edgelist_filename = 'unweighted_edge_list.txt'
-            df.to_csv(dir_name + '/' + edgelist_filename, sep=' ',
-                      index=False, header=False, encoding='utf-8')
+            uw_el.to_csv(dir_name + '/' + edgelist_filename, sep=' ',
+                         index=False, header=False, encoding='utf-8')
 
-        # run .mcliques
-        # for each output file, run cosparallel
+        else:
+            return pd.DataFrame(columns=['Set', 'k'])
+
+        # run .mcliques, then for each output file, run cosparallel
         cmds = ['cd %s' % dir_name,
                 '%s/./maximal_cliques %s' % (
-                TOOLS_DIR.replace(' ', '\ '),  # there must be better ways to escape spaces
-                edgelist_filename.replace(' ', '\ ')),
+                    TOOLS_DIR.replace(' ', '\ '),  # there must be better ways to escape spaces
+                    edgelist_filename.replace(' ', '\ ')),
                 '%s/./cos %s.mcliques' % (TOOLS_DIR.replace(' ', '\ '),
                                           edgelist_filename.replace(' ', '\ '))]
 
@@ -85,17 +86,18 @@ def find_clusters(unweighted_edge_list):
         community_files = glob.glob(dir_name + '/[0-9]*_communities.txt')
 
         if len(community_files) > 0:
-            cluster_list = list()
+            collector = []
 
             for infile in community_files:
                 k = int(os.path.basename(infile).rstrip('_communities.txt'))
-                clusters = read_COS_output_file(infile, mapping)
-                clusters_list = map(lambda x: ' '.join(list(x)), clusters.values())
-                df = pd.DataFrame(pd.Series(clusters_list, dtype=str), columns=['Set'])
-                df['k'] = k
-                cluster_list.append(df)
+                clusters = lazy_read_output(infile, mapping)
+                clusters = clusters.assign(k=k)
+                collector.append(clusters)
 
-            clusters_df = pd.concat(cluster_list)
+            template = pd.DataFrame([{'Set': 'Toad Bug', 'k': 5}],
+                                    columns=['Set', 'k'])
+
+            clusters_df = dd.from_delayed(collector, meta=template).compute()
         else:
             clusters_df = pd.DataFrame(columns=['Set', 'k'])
 
@@ -118,9 +120,6 @@ def read_COS_output_file(infile_name, mapping):
     clusters: dictionary
 
     """
-
-    # todo: this could be rewritten with dask, to read rows into a df,
-    # and then sum those with the same index name.
     clusters = dict()
     with open(infile_name, 'r') as fin:
         for i, line in enumerate(fin):
@@ -132,10 +131,17 @@ def read_COS_output_file(infile_name, mapping):
             for node in nodes:
                 word = str(mapping.loc[int(node)]['word'])
                 clusters[name].add(word)
-    return clusters
+
+    clusters_list = map(lambda x: ' '.join(list(x)), clusters.values())
+    clusters_df = pd.DataFrame(pd.Series(clusters_list, dtype=str), columns=['Set'])
+
+    return clusters_df
 
 
-def find_clusters_for_any_threshold(weighted_edge_list, min_threshold=1):
+lazy_read_output = delayed(read_COS_output_file)
+
+
+def find_clusters_by_threshold(weighted_edge_list, thresholds=[1]):
     """
     The information we have from the network contains not just structure,
     but weights. These weights tell us how frequently individuals recognize
@@ -160,34 +166,21 @@ def find_clusters_for_any_threshold(weighted_edge_list, min_threshold=1):
     clusters: dask DataFrame
 
     """
-    #todo: this might be reasonable to sort in k order?
-    thresholds = weighted_edge_list['Count'].unique()
     clusters_collector = []
-    for t in np.array(thresholds):
-        if t < min_threshold:
-            continue
-        cluster = delayed(find_clusters_over_threshold)(weighted_edge_list, t)
-        clusters_collector.append(cluster)
+    for threshold in thresholds:
+        unweighted = weighted_edge_list[weighted_edge_list['Count'] >= threshold]
+        clusters = find_clusters(unweighted[['W1', 'W2']])
+        clusters = clusters.assign(threshold=threshold)
+        clusters_collector.append(clusters)
 
-    clusters = dd.from_delayed(clusters_collector)
-    return clusters
+    clusters = pd.concat(clusters_collector, ignore_index=True)
 
-
-def find_clusters_over_threshold(weighted_edge_list, threshold):
-    """
-    Find clusters where all edges in the cluster have at least 'threshold' occurrances
-    in the dataset.
-
-    """
-    uw_el = weighted_edge_list[weighted_edge_list['Count'] >= threshold]
-    clusters = find_clusters(uw_el[['W1', 'W2']])
-    clusters['threshold'] = threshold
     return clusters
 
 
 def build_cluster_db(weighted_edge_list,
                      output_globstring,
-                     min_threshold=1):
+                     thresholds=[1]):
     """
     need to separate by date, then get the clusters dataframe, then add
     the date parameter, then create a unique id by hashing the data, then
@@ -196,9 +189,9 @@ def build_cluster_db(weighted_edge_list,
 
     Parameters
     ----------
-    weighted_edge_list
-    min_threshold
-    by
+    weighted_edge_list: pandas or dask dataframe
+    output_globstring:
+    thresholds
 
     Returns
     -------
@@ -208,26 +201,19 @@ def build_cluster_db(weighted_edge_list,
     collector = []
     for date in np.array(weighted_edge_list.Date.unique()):
         selection = weighted_edge_list[weighted_edge_list.Date == date]
-        df = find_clusters_for_any_threshold(selection,
-                                             min_threshold=min_threshold)
+        clusters = find_clusters_by_threshold(selection,
+                                              thresholds=thresholds)
+        clusters = clusters.reset_index(drop=True)
+        clusters.index = map(lambda x: int(str(date) + str(x)), clusters.index)
+        clusters.to_csv(output_globstring.replace('*', str(date)))
+        collector.append(clusters)
 
-        if df.ndim > 0:
-            df_2 = df.assign(Date=date)
-            collector.append(df_2)
-
-    clusters = dd.concat(collector, interleave_partitions=True)
-    clusters = clusters.repartition(npartitions=1)  # Todo: This partitioning is problematic
-    clusters = clusters.reset_index(drop=True) #Todo: need to set an index which is unlikely to
-    # also be a word in a cluster.
-    clusters.to_hdf(output_globstring, '/clusters', dropna=True)
-
-    return clusters
+    return collector
 
 
 def build_transition_cluster_db(weighted_edge_list,
                                 output_globstring,
-                                min_threshold=1):
-
+                                thresholds=[1]):
     """ Identifies clusters formed from edgelists representing
     two consecutive days, returning the clusters that are formed
     from the intersection of those days conversations.
@@ -241,17 +227,12 @@ def build_transition_cluster_db(weighted_edge_list,
 
     for d1, d2 in zip(dates[:-1], dates[1:]):
         selection = weighted_edge_list[int(d1) <= weighted_edge_list.Date <= int(d2)]
-        df = find_clusters_for_any_threshold(selection,
-                                             min_threshold=min_threshold)
 
-        if df.ndim > 0:
-            df_2 = df.assign(Date_1=d1).assign(Date_2=d2)
-            collector.append(df_2)
+        clusters = find_clusters_by_threshold(selection,
+                                              thresholds=thresholds)
+        clusters = clusters.reset_index(drop=True)
+        clusters.index = map(lambda x: int(str(d1) + str(d2) + str(x)), clusters.index)
+        clusters.to_csv(output_globstring.replace('*', str(d1) + '_' + str(d2)))
+        collector.append(clusters)
 
-    clusters = dd.concat(collector, interleave_partitions=True)
-    clusters = clusters.repartition(npartitions=1)  # Todo: This partitioning is problematic
-    clusters = clusters.reset_index(drop=True)  # Todo: need to set an index which is unlikely to
-    # also be a word in a cluster.
-    clusters.to_hdf(output_globstring, '/transition_clusters', dropna=True)
-
-    return clusters
+    return collector

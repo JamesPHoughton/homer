@@ -1,6 +1,9 @@
 import dask.bag as db
-import glob
+from dask.diagnostics import ProgressBar
+from dask import delayed
+import dask
 
+import collections
 import ujson
 from itertools import combinations
 import re
@@ -10,6 +13,12 @@ from nltk.tokenize import RegexpTokenizer
 import os
 import pickle
 import pandas as pd
+import time
+import glob
+
+
+# Code for processing a single tw file into a corresponding weighted edge list
+
 
 __location__ = os.path.realpath(
     os.path.join(os.getcwd(), os.path.dirname(__file__)))
@@ -18,121 +27,152 @@ sw_file = os.path.join(__location__, "stopwords.pickle")
 tw_stopwords = pickle.load(open(sw_file, "rb"))
 
 tokenizer = RegexpTokenizer(r'\w+')
+matcher = re.compile(r'\w+:\/{2}[\d\w-]+(\.[\d\w-]+)*(?:(?:\/[^\s/]*))*')
 
 
-def find_pairs(parsed_json):
-    text = parsed_json['text'].lower()
+def fold_pairs(counter, json_string, languages):
+    parsed_json = ujson.loads(json_string)
+    if ('lang' in parsed_json and
+                'text' in parsed_json and
+                parsed_json['lang'] in languages):
+        text = parsed_json['text'].lower()
 
-    # remove hyperlinks
-    text = re.sub(r'\w+:\/{2}[\d\w-]+(\.[\d\w-]+)*(?:(?:\/[^\s/]*))*', '', text)
+        # remove hyperlinks
+        text = matcher.sub('', text)
 
-    # tokenize, dropping punctuation
-    tokens = tokenizer.tokenize(text)  # this should release GIL - be ok for parallelization
+        # tokenize, dropping punctuation
+        tokens = tokenizer.tokenize(text)  # this should release GIL - be ok for parallelization
 
-    # drop stopwords
-    tokens = filter(lambda x: x not in tw_stopwords, tokens)
+        # drop stopwords
+        tokens = filter(lambda x: x not in tw_stopwords, tokens)
 
-    date = dateutil.parser.parse(parsed_json['created_at']).strftime("%Y%m%d")
+        date = int(dateutil.parser.parse(parsed_json['created_at']).strftime("%Y%m%d"))
 
-    sets = [tuple([date] + sorted(pair)) for pair in combinations(tokens, 2)]
-    return sets
+        if date not in counter:
+            counter[date] = collections.Counter()
+        for pair in combinations(tokens, 2):
+            counter[date][tuple(sorted(pair))] += 1
 
-
-#
-# def get_message_cooccurences(json_message, languages=[], hashtags_only=False):
-#     """
-#     Identifies word combinations in a single twitter message.
-#     Drops stopwords and punctuation.
-#
-#     Parameters
-#     ----------
-#     json_message: basestring
-#         a single line from a raw twitter json file
-#
-#     Returns
-#     -------
-#     sets: list of tuples
-#         each tuple contains the date and two words (in alphabetical order) of a pair
-#
-#     """
-#
-#     # todo: make the hashtags_only parameter operable
-#     try:
-#         parsed_json = json.loads(json_message)
-#         assert parsed_json['lang'] in languages
-#         text = parsed_json['text'].lower()
-#
-#     except KeyError:  # There is no 'text', or no 'lang' in json body
-#         return []
-#
-#     except AssertionError:  # Not in the target language
-#         return []
-#
-#     # remove hyperlinks
-#     text = re.sub(r'\w+:\/{2}[\d\w-]+(\.[\d\w-]+)*(?:(?:\/[^\s/]*))*', '', text)
-#
-#     # tokenize, dropping punctuation
-#     tokenizer = RegexpTokenizer(r'\w+')
-#     tokens = tokenizer.tokenize(text)
-#
-#     # drop stopwords
-#     tokens = filter(lambda x: x not in tw_stopwords, tokens)
-#
-#     date = dateutil.parser.parse(parsed_json['created_at']).strftime("%Y%m%d")
-#
-#     sets = [tuple([date] + sorted(pair)) for pair in combinations(tokens, 2)]
-#
-#     return sets
-#
+    return counter
 
 
+def merge_folds(a, b, outupt_globstring):
+    outfiles = []
+    if isinstance(a, dict):
+        for date, c in a.items():
+            if len(c):
+                outfile_name = outupt_globstring.replace(
+                    '*', date + '_' + str(time.time()).replace('.', '_') + 'a')
+                pd.Series(c).to_csv(outfile_name)
+                outfiles.append(outfile_name)
+
+    if isinstance(b, dict):
+        for date, c in b.items():
+            if len(c):
+                outfile_name = outupt_globstring.replace(
+                    '*', date + '_' + str(time.time()).replace('.', '_') + 'b')
+                pd.Series(c).to_csv(outfile_name)
+                outfiles.append(outfile_name)
+
+    if isinstance(a, list):
+        outfiles = outfiles + a
+
+    if isinstance(b, list):
+        outfiles = outfiles + b
+
+    return outfiles
 
 
-def get_weighted_edgelist(tw_file_globstring,
-                          languages,
-                          save_threshold=3,
-                          hashtags_only=False):
+def process_raw_tw(tw_file_globstring,
+                   output_globstring,
+                   languages,
+                   dates):
     """
 
     Parameters
     ----------
-    tw_files: Absolute or relative filepath, globstring, or list of strings
-        The raw twitter JSON files to be processed, either individually or in a list
+    tw_file_globstring
+    output_globstring
+    languages
+    dates
 
     Returns
     -------
-    df: dask dataframe
-        weighted edgelist, columns ['Date', 'W1', 'W2', 'Count']
+    outfiles: list of strings
+        filenames of the intermediate files
+        one file per input file.
 
     """
-    messages = db.read_text(tw_file_globstring, compression='gzip').map(ujson.loads)
+    lines = db.read_text(tw_file_globstring, compression='gzip', collection=True)
 
-    def selector(msg):
-        return 'lang' in msg and 'text' in msg and msg['lang'] in languages
+    initial_counter = {date: collections.Counter() for date in dates}
+    counters = lines.fold(binop=lambda count, json: fold_pairs(count, json, languages),
+                          combine=lambda a, b: merge_folds(a, b, output_globstring),
+                          initial=initial_counter)
 
-    selection = messages.filter(selector)
-    sets = selection.map(find_pairs).concat()
-    frequencies = sets.frequencies()
-    over_threshold = frequencies.filter(lambda x: x[1] >= save_threshold)
-    expand = over_threshold.map(lambda x: (x[0][0], x[0][1], x[0][2], x[1]))
+    with ProgressBar():
+        outfiles = counters.compute()
 
-    template = pd.DataFrame([{'Date': 20170121, 'W1': 'Toad', 'W2': u'Bug', 'Count': 21}],
-                            columns=['Date', 'W1', 'W2', 'Count'])
+    return outfiles
 
-    df = expand.to_dataframe(template)
 
-    return df
+# code for combining multiple weighted edgelist files into a file for each day
+
+
+def sum_files(files):
+    collector = pd.DataFrame(columns=['W1', 'W2', 'Count']).set_index(['W1', 'W2'])
+    for csv_file in files:
+        df = pd.read_csv(csv_file, names=['W1', 'W2', 'Count']).set_index(['W1', 'W2'])
+        collector = collector.add(df, fill_value=0)
+    return collector.astype(int)
+
+
+def handle_day(input_filenames, output_filename, threshold=1):
+
+    totals = sum_files(input_filenames)
+    keepers = totals[totals['Count'] >= threshold]
+    keepers.to_csv(output_filename)
+    return output_filename
+
+
+lazy_handle_day = delayed(handle_day)
+
+
+def process_count_files(infiles_globstring,
+                        outfiles_globstring,
+                        dates,
+                        threshold=1,
+                        ):
+    collector = []
+    for date in dates:
+        date_globstring = infiles_globstring.replace('*', date+'*')
+        input_filenames = glob.glob(date_globstring)
+        output_filename = outfiles_globstring.replace('*', date)
+        collector.append(lazy_handle_day(input_filenames,
+                                         output_filename,
+                                         threshold))
+    with ProgressBar():
+        output_filenames = dask.compute(collector)
+
+    return output_filenames
 
 
 def build_weighted_edgelist_db(tw_file_globstring,
-                               output_globstring,
+                               intermediate_files_globstring,
+                               output_files_globstring,
+                               languages,
+                               dates,
+                               threshold=1,
                                hashtags_only=False,
-                               languages=['en'],
-                               save_threshold=3):
-    weighted_edgelist = get_weighted_edgelist(tw_file_globstring,
-                                              languages=languages,
-                                              save_threshold=save_threshold,
-                                              hashtags_only=hashtags_only)
+                               ):
 
-    weighted_edgelist.to_hdf(output_globstring, '/weighted_edge_list', dropna=True)
-    return weighted_edgelist
+    intermediate_files = process_raw_tw(tw_file_globstring,
+                                        intermediate_files_globstring,
+                                        languages,
+                                        dates)
+    output_files = process_count_files(intermediate_files_globstring,
+                                       output_files_globstring,
+                                       dates,
+                                       threshold)
+
+    return output_files

@@ -7,7 +7,7 @@ import pandas as pd
 
 class TestClusterer(unittest.TestCase):
     def test_find_clusters(self):
-        from homer import clusterer
+        from homer.homer import clusterer
         uw_el = dd.read_csv('resources/unweighted_edgelist_sample_small.txt', sep=' ')
         clusters = clusterer.find_clusters(uw_el)
         self.assertIsInstance(clusters, pd.DataFrame)
@@ -15,12 +15,11 @@ class TestClusterer(unittest.TestCase):
         self.assertIn('Set', clusters.columns)
 
     def test_traverse_thresholds(self):
-        from homer.clusterer import find_clusters_for_any_threshold
+        from homer.homer.clusterer import build_cluster_db
         w_el = dd.read_csv('resources/weighted_edgelist_sample.txt',
                            sep=' ', names=['W1', 'W2', 'Count'])
-        clusters = find_clusters_for_any_threshold(w_el)
-        clusters.compute()
-        self.assertIn('k', clusters.columns)
-        self.assertIn('Set', clusters.columns)
+        w_el['Date'] = 1
+        clusters = build_cluster_db(w_el, '../working/test_output_*.csv')
+
 
 

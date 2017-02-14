@@ -29,6 +29,70 @@ class TemporaryDirectory(object):
         shutil.rmtree(self.name)
 
 
+def run_cluster_algorithm(unweighted_edge_list, dir_name):
+    if isinstance(unweighted_edge_list, dd.DataFrame):
+        # repartition to be in one partition
+        uw_el = unweighted_edge_list.repartition(npartitions=1)
+
+        # write the unweighted edgelist to a file
+        glob_filename = 'unweighted_edge_list.*.txt'
+        edgelist_filename = glob_filename.replace('*', '0')
+
+        uw_el.to_csv(dir_name + '/' + glob_filename, sep=' ',
+                     index=False, header=False, encoding='utf-8')
+
+    elif isinstance(unweighted_edge_list, pd.DataFrame):
+        uw_el = unweighted_edge_list
+
+        edgelist_filename = 'unweighted_edge_list.txt'
+        uw_el.to_csv(dir_name + '/' + edgelist_filename, sep=' ',
+                     index=False, header=False, encoding='utf-8')
+
+    else:
+        return pd.DataFrame(columns=['Set', 'k'])
+
+    # run .mcliques, then for each output file, run cosparallel
+    cmds = ['cd %s' % dir_name,
+            '%s/./maximal_cliques %s' % (
+                TOOLS_DIR.replace(' ', '\ '),  # there must be better ways to escape spaces
+                edgelist_filename.replace(' ', '\ ')),
+            '%s/./cos %s.mcliques' % (TOOLS_DIR.replace(' ', '\ '),
+                                      edgelist_filename.replace(' ', '\ '))]
+
+    response = subprocess.check_output(r'; '.join(cmds), shell=True)
+
+    return response
+
+def process_cluster_algorithm_output(dir_name):
+    # read the mapping file created by 'maximal_cliques'
+    map_filename = glob.glob(dir_name + '/*.map')
+
+    mapping = pd.read_csv(map_filename[0], sep=' ', header=None,
+                          names=['word', 'number'],
+                          index_col='number')
+
+    # read the community files
+    community_files = glob.glob(dir_name + '/[0-9]*_communities.txt')
+
+    if len(community_files) > 0:
+        collector = []
+
+        for infile in community_files:
+            k = int(os.path.basename(infile).rstrip('_communities.txt'))
+            clusters = lazy_read_output(infile, mapping)
+            clusters = clusters.assign(k=k)
+            collector.append(clusters)
+
+        template = pd.DataFrame([{'Set': 'Toad Bug', 'k': 5}],
+                                columns=['Set', 'k'])
+
+        clusters_df = dd.from_delayed(collector, meta=template).compute()
+    else:
+        clusters_df = pd.DataFrame(columns=['Set', 'k'])
+
+    return clusters_df
+
+
 def find_clusters(unweighted_edge_list):
     """
     Uses COSparallel to identify new clusters from an unweighted edgelist.
@@ -43,65 +107,8 @@ def find_clusters(unweighted_edge_list):
     """
     # create a working directory
     with TemporaryDirectory() as dir_name:
-
-        if isinstance(unweighted_edge_list, dd.DataFrame):
-            # repartition to be in one partition
-            uw_el = unweighted_edge_list.repartition(npartitions=1)
-
-            # write the unweighted edgelist to a file
-            glob_filename = 'unweighted_edge_list.*.txt'
-            edgelist_filename = glob_filename.replace('*', '0')
-
-            uw_el.to_csv(dir_name + '/' + glob_filename, sep=' ',
-                         index=False, header=False, encoding='utf-8')
-
-        elif isinstance(unweighted_edge_list, pd.DataFrame):
-            uw_el = unweighted_edge_list
-
-            edgelist_filename = 'unweighted_edge_list.txt'
-            uw_el.to_csv(dir_name + '/' + edgelist_filename, sep=' ',
-                         index=False, header=False, encoding='utf-8')
-
-        else:
-            return pd.DataFrame(columns=['Set', 'k'])
-
-        # run .mcliques, then for each output file, run cosparallel
-        cmds = ['cd %s' % dir_name,
-                '%s/./maximal_cliques %s' % (
-                    TOOLS_DIR.replace(' ', '\ '),  # there must be better ways to escape spaces
-                    edgelist_filename.replace(' ', '\ ')),
-                '%s/./cos %s.mcliques' % (TOOLS_DIR.replace(' ', '\ '),
-                                          edgelist_filename.replace(' ', '\ '))]
-
-        response = subprocess.check_output(r'; '.join(cmds), shell=True)
-
-        # read the mapping file created by 'maximal_cliques'
-        map_filename = glob.glob(dir_name + '/*.map')
-
-        mapping = pd.read_csv(map_filename[0], sep=' ', header=None,
-                              names=['word', 'number'],
-                              index_col='number')
-
-        # read the community files
-        community_files = glob.glob(dir_name + '/[0-9]*_communities.txt')
-
-        if len(community_files) > 0:
-            collector = []
-
-            for infile in community_files:
-                k = int(os.path.basename(infile).rstrip('_communities.txt'))
-                clusters = lazy_read_output(infile, mapping)
-                clusters = clusters.assign(k=k)
-                collector.append(clusters)
-
-            template = pd.DataFrame([{'Set': 'Toad Bug', 'k': 5}],
-                                    columns=['Set', 'k'])
-
-            clusters_df = dd.from_delayed(collector, meta=template).compute()
-        else:
-            clusters_df = pd.DataFrame(columns=['Set', 'k'])
-
-    return clusters_df
+        run_cluster_algorithm(unweighted_edge_list, dir_name)
+        return process_cluster_algorithm_output(dir_name)
 
 
 def read_COS_output_file(infile_name, mapping):

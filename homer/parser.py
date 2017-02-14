@@ -32,9 +32,7 @@ matcher = re.compile(r'\w+:\/{2}[\d\w-]+(\.[\d\w-]+)*(?:(?:\/[^\s/]*))*')
 
 def fold_pairs(counter, json_string, languages):
     parsed_json = ujson.loads(json_string)
-    if ('lang' in parsed_json and
-                'text' in parsed_json and
-                parsed_json['lang'] in languages):
+    if 'lang' in parsed_json and 'text' in parsed_json and parsed_json['lang'] in languages:
         text = parsed_json['text'].lower()
 
         # remove hyperlinks
@@ -58,27 +56,18 @@ def fold_pairs(counter, json_string, languages):
 
 def merge_folds(a, b, outupt_globstring):
     outfiles = []
-    if isinstance(a, dict):
-        for date, c in a.items():
-            if len(c):
-                outfile_name = outupt_globstring.replace(
-                    '*', date + '_' + str(time.time()).replace('.', '_') + 'a')
-                pd.Series(c).to_csv(outfile_name)
-                outfiles.append(outfile_name)
 
-    if isinstance(b, dict):
-        for date, c in b.items():
-            if len(c):
-                outfile_name = outupt_globstring.replace(
-                    '*', date + '_' + str(time.time()).replace('.', '_') + 'b')
-                pd.Series(c).to_csv(outfile_name)
-                outfiles.append(outfile_name)
+    for fold in a, b:
+        if isinstance(fold, dict):
+            for date, c in fold.items():
+                if len(c):
+                    outfile_name = outupt_globstring.replace(
+                        '*', date + '_' + str(time.time()).replace('.', '_'))
+                    pd.Series(c).to_csv(outfile_name)
+                    outfiles.append(outfile_name)
 
-    if isinstance(a, list):
-        outfiles = outfiles + a
-
-    if isinstance(b, list):
-        outfiles = outfiles + b
+        elif isinstance(fold, list):
+            outfiles = outfiles + fold
 
     return outfiles
 

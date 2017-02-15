@@ -16,6 +16,7 @@ import tempfile
 import dask.dataframe as dd
 from dask import delayed
 import numpy as np
+import dask
 
 TOOLS_DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -56,44 +57,38 @@ def run_cluster_algorithm(unweighted_edge_list, dir_name):
             '%s/./maximal_cliques %s' % (
                 TOOLS_DIR.replace(' ', '\ '),  # there must be better ways to escape spaces
                 edgelist_filename.replace(' ', '\ ')),
-            '%s/./cos %s.mcliques' % (TOOLS_DIR.replace(' ', '\ '),
+            '%s/./cos -P 16 %s.mcliques' % (TOOLS_DIR.replace(' ', '\ '),
                                       edgelist_filename.replace(' ', '\ '))]
 
     response = subprocess.check_output(r'; '.join(cmds), shell=True)
 
-    return response
+    return response~/hom
 
-def process_cluster_algorithm_output(dir_name):
+
+
+def process_cluster_algorithm_output(cos_raw_dir, cluster_dir, date):
     # read the mapping file created by 'maximal_cliques'
-    map_filename = glob.glob(dir_name + '/*.map')
+    map_filename = glob.glob(cos_raw_dir + '/*.map')
 
     mapping = pd.read_csv(map_filename[0], sep=' ', header=None,
                           names=['word', 'number'],
                           index_col='number')
 
     # read the community files
-    community_files = glob.glob(dir_name + '/[0-9]*_communities.txt')
+    community_files = glob.glob(cos_raw_dir + '/[0-9]*_communities.txt')
 
     if len(community_files) > 0:
         collector = []
 
         for infile in community_files:
-            k = int(os.path.basename(infile).rstrip('_communities.txt'))
-            clusters = lazy_read_output(infile, mapping)
-            clusters = clusters.assign(k=k)
-            collector.append(clusters)
-
-        template = pd.DataFrame([{'Set': 'Toad Bug', 'k': 5}],
-                                columns=['Set', 'k'])
-
-        clusters_df = dd.from_delayed(collector, meta=template).compute()
-    else:
-        clusters_df = pd.DataFrame(columns=['Set', 'k'])
-
-    return clusters_df
+            k = os.path.basename(infile).rstrip('_communities.txt')
+            outfile = cluster_dir + '/' + k + '_named_communities.csv'
+            cluster_id_base = '__%s_%s' % (date, k)
+            collector.append(lazy_read_output(infile, outfile, mapping, cluster_id_base))
+        dask.compute(*collector, get=dask.multiprocessing.get)
 
 
-def find_clusters(unweighted_edge_list):
+def find_clusters(unweighted_edge_list, cos_raw_dir, cluster_dir, date):
     """
     Uses COSparallel to identify new clusters from an unweighted edgelist.
 
@@ -105,17 +100,15 @@ def find_clusters(unweighted_edge_list):
     -------
     pandas DataFrame
     """
-    # create a working directory
-    with TemporaryDirectory() as dir_name:
-        run_cluster_algorithm(unweighted_edge_list, dir_name)
-        return process_cluster_algorithm_output(dir_name)
+    run_cluster_algorithm(unweighted_edge_list, cos_raw_dir)
+    process_cluster_algorithm_output(cos_raw_dir, cluster_dir, date)
 
 
-def read_COS_output_file(infile_name, mapping):
+def read_COS_output_file(infile_name, outfile_name, mapping, cluster_id_base):
     """
     Reads an output of the COS program (there are multiple)
-    and returns a dictionary with keys being the integer cluster name,
-    and elements being a set of the keywords in that cluster
+    and outputs a csv file which has built clusters from that
+    input
 
     Parameters
     ----------
@@ -136,19 +129,22 @@ def read_COS_output_file(infile_name, mapping):
             # the elements of the cluster are after the colon, space delimited
             nodes = line.split(':')[1].split(' ')[:-1]
             for node in nodes:
-                word = str(mapping.loc[int(node)]['word'])
-                clusters[name].add(word)
+                clusters[name].add(node)  # set takes care of repeats
 
-    clusters_list = map(lambda x: ' '.join(list(x)), clusters.values())
-    clusters_df = pd.DataFrame(pd.Series(clusters_list, dtype=str), columns=['Set'])
+    with open(outfile_name, 'w') as fout:
+        for key, cluster_set in clusters.items():
+            cluster_id = cluster_id_base + '_' + key
+            words = [mapping.loc[int(element)]['word'] for element in cluster_set]
+            fout.write(cluster_id + ', ' + ' '.join(words) + '\n')
 
-    return clusters_df
 
 
 lazy_read_output = delayed(read_COS_output_file)
 
 
-def find_clusters_by_threshold(weighted_edge_list, thresholds=[1]):
+def find_clusters_by_threshold(weighted_edge_list,
+                               thresholds=[1],
+                               working_directory=None):
     """
     The information we have from the network contains not just structure,
     but weights. These weights tell us how frequently individuals recognize
@@ -176,7 +172,7 @@ def find_clusters_by_threshold(weighted_edge_list, thresholds=[1]):
     clusters_collector = []
     for threshold in thresholds:
         unweighted = weighted_edge_list[weighted_edge_list['Count'] >= threshold]
-        clusters = find_clusters(unweighted[['W1', 'W2']])
+        clusters = find_clusters(unweighted[['W1', 'W2']], working_directory)
         clusters = clusters.assign(threshold=threshold)
         clusters_collector.append(clusters)
 
@@ -208,7 +204,7 @@ def build_cluster_db(weighted_edge_list,
     collector = []
     for date in np.array(weighted_edge_list.Date.unique()):
         selection = weighted_edge_list[weighted_edge_list.Date == date]
-        clusters = find_clusters_by_threshold(selection,
+        clusters = find_clusters_by_threshold(weighted_edge_list=selection,
                                               thresholds=thresholds)
         clusters = clusters.reset_index(drop=True)
         clusters.index = map(lambda x: int(str(date) + str(x)), clusters.index)

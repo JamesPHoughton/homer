@@ -30,19 +30,29 @@ tokenizer = RegexpTokenizer(r'\w+')
 matcher = re.compile(r'\w+:\/{2}[\d\w-]+(\.[\d\w-]+)*(?:(?:\/[^\s/]*))*')
 
 
-def fold_pairs(counter, json_string, languages):
+def fold_pairs(counter, json_string, languages, hashtags_only):
     parsed_json = ujson.loads(json_string)
     if 'lang' in parsed_json and 'text' in parsed_json and parsed_json['lang'] in languages:
-        text = parsed_json['text'].lower()
+        if not hashtags_only:
+            text = parsed_json['text'].lower()
 
-        # remove hyperlinks
-        text = matcher.sub('', text)
+            # remove hyperlinks
+            text = matcher.sub('', text)
 
-        # tokenize, dropping punctuation
-        tokens = tokenizer.tokenize(text)  # this should release GIL - be ok for parallelization
+            # tokenize, dropping punctuation
+            tokens = tokenizer.tokenize(text)  # this should release GIL - be ok for parallelization
 
-        # drop stopwords
-        tokens = filter(lambda x: x not in tw_stopwords, tokens)
+            # drop stopwords
+            tokens = filter(lambda x: x not in tw_stopwords, tokens)
+
+        else:
+            if ('entities' in parsed_json and
+                        'hashtags' in parsed_json['entities'] and
+                        len(parsed_json['entities']['hashtags']) >= 2):
+                tokens = [entry['text'].lower() for entry in
+                          parsed_json['entities']['hashtags']]
+            else:
+                tokens = []
 
         date = int(dateutil.parser.parse(parsed_json['created_at']).strftime("%Y%m%d"))
 
@@ -55,6 +65,11 @@ def fold_pairs(counter, json_string, languages):
 
 
 def merge_folds(a, b, outupt_globstring):
+    """
+    For each input file, writes an output file for each date
+    within that input file, separating dates from one another so
+    they can be processed separately later on.
+    """
     outfiles = []
 
     for fold in a, b:
@@ -62,7 +77,7 @@ def merge_folds(a, b, outupt_globstring):
             for date, c in fold.items():
                 if len(c):
                     outfile_name = outupt_globstring.replace(
-                        '*', date + '_' + str(time.time()).replace('.', '_'))
+                        '*', str(date) + '_' + str(time.time()).replace('.', '_'))
                     pd.Series(c).to_csv(outfile_name)
                     outfiles.append(outfile_name)
 
@@ -75,7 +90,8 @@ def merge_folds(a, b, outupt_globstring):
 def process_raw_tw(tw_file_globstring,
                    output_globstring,
                    languages,
-                   dates):
+                   dates,
+                   hashtags_only):
     """
 
     Parameters
@@ -95,7 +111,8 @@ def process_raw_tw(tw_file_globstring,
     lines = db.read_text(tw_file_globstring, compression='gzip', collection=True)
 
     initial_counter = {date: collections.Counter() for date in dates}
-    counters = lines.fold(binop=lambda count, json: fold_pairs(count, json, languages),
+    counters = lines.fold(binop=lambda count, json: fold_pairs(count, json,
+                                                               languages, hashtags_only),
                           combine=lambda a, b: merge_folds(a, b, output_globstring),
                           initial=initial_counter)
 
@@ -117,7 +134,6 @@ def sum_files(files):
 
 
 def handle_day(input_filenames, output_filename, threshold=1):
-
     totals = sum_files(input_filenames)
     keepers = totals[totals['Count'] >= threshold]
     keepers.to_csv(output_filename)
@@ -134,14 +150,14 @@ def process_count_files(infiles_globstring,
                         ):
     collector = []
     for date in dates:
-        date_globstring = infiles_globstring.replace('*', date+'*')
+        date_globstring = infiles_globstring.replace('*', str(date)+'*')
         input_filenames = glob.glob(date_globstring)
-        output_filename = outfiles_globstring.replace('*', date)
+        output_filename = outfiles_globstring.replace('*', str(date))
         collector.append(lazy_handle_day(input_filenames,
                                          output_filename,
                                          threshold))
     with ProgressBar():
-        output_filenames = dask.compute(collector)
+        output_filenames = dask.compute(*collector)
 
     return output_filenames
 
@@ -154,11 +170,31 @@ def build_weighted_edgelist_db(tw_file_globstring,
                                threshold=1,
                                hashtags_only=False,
                                ):
+    """
+
+    Parameters
+    ----------
+    tw_file_globstring
+    intermediate_files_globstring: string
+        csv file name with an astrisk
+    output_files_globstring
+    languages
+    dates: list of integers 20150615 style
+        this is to initialize the counters, so we don't have to infer dates (which can take time
+        if there are a lot of them)
+    threshold
+    hashtags_only
+
+    Returns
+    -------
+
+    """
 
     intermediate_files = process_raw_tw(tw_file_globstring,
                                         intermediate_files_globstring,
-                                        languages,
-                                        dates)
+                                        languages=languages,
+                                        dates=dates,
+                                        hashtags_only=hashtags_only)
     output_files = process_count_files(intermediate_files_globstring,
                                        output_files_globstring,
                                        dates,

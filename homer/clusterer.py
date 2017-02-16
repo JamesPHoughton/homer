@@ -58,50 +58,11 @@ def run_cluster_algorithm(unweighted_edge_list, dir_name):
                 TOOLS_DIR.replace(' ', '\ '),  # there must be better ways to escape spaces
                 edgelist_filename.replace(' ', '\ ')),
             '%s/./cos -P 16 %s.mcliques' % (TOOLS_DIR.replace(' ', '\ '),
-                                      edgelist_filename.replace(' ', '\ '))]
+                                            edgelist_filename.replace(' ', '\ '))]
 
     response = subprocess.check_output(r'; '.join(cmds), shell=True)
 
-    return response~/hom
-
-
-
-def process_cluster_algorithm_output(cos_raw_dir, cluster_dir, date):
-    # read the mapping file created by 'maximal_cliques'
-    map_filename = glob.glob(cos_raw_dir + '/*.map')
-
-    mapping = pd.read_csv(map_filename[0], sep=' ', header=None,
-                          names=['word', 'number'],
-                          index_col='number')
-
-    # read the community files
-    community_files = glob.glob(cos_raw_dir + '/[0-9]*_communities.txt')
-
-    if len(community_files) > 0:
-        collector = []
-
-        for infile in community_files:
-            k = os.path.basename(infile).rstrip('_communities.txt')
-            outfile = cluster_dir + '/' + k + '_named_communities.csv'
-            cluster_id_base = '__%s_%s' % (date, k)
-            collector.append(lazy_read_output(infile, outfile, mapping, cluster_id_base))
-        dask.compute(*collector, get=dask.multiprocessing.get)
-
-
-def find_clusters(unweighted_edge_list, cos_raw_dir, cluster_dir, date):
-    """
-    Uses COSparallel to identify new clusters from an unweighted edgelist.
-
-    Parameters
-    ----------
-    unweighted_edge_list: dask (or pandas) dataframe with columns 'W1' and 'W2' only
-
-    Returns
-    -------
-    pandas DataFrame
-    """
-    run_cluster_algorithm(unweighted_edge_list, cos_raw_dir)
-    process_cluster_algorithm_output(cos_raw_dir, cluster_dir, date)
+    return response
 
 
 def read_COS_output_file(infile_name, outfile_name, mapping, cluster_id_base):
@@ -138,13 +99,40 @@ def read_COS_output_file(infile_name, outfile_name, mapping, cluster_id_base):
             fout.write(cluster_id + ', ' + ' '.join(words) + '\n')
 
 
-
 lazy_read_output = delayed(read_COS_output_file)
 
 
+def process_cluster_algorithm_output(cos_raw_dir, cluster_dir, date):
+    # read the mapping file created by 'maximal_cliques'
+    map_filename = glob.glob(cos_raw_dir + '/*.map')
+
+    mapping = pd.read_csv(map_filename[0], sep=' ', header=None,
+                          names=['word', 'number'],
+                          index_col='number')
+
+    # read the community files
+    community_files = glob.glob(cos_raw_dir + '/[0-9]*_communities.txt')
+
+    if len(community_files) > 0:
+        dask_collector = []
+        outfiles_collector = []
+
+        for infile in community_files:
+            k = os.path.basename(infile).rstrip('_communities.txt')
+            outfile = cluster_dir + '/' + k + '_named_communities.csv'
+            cluster_id_base = '__%s_%s' % (date, k)
+            dask_collector.append(lazy_read_output(infile, outfile, mapping, cluster_id_base))
+            outfiles_collector.append(outfile)
+        dask.compute(*dask_collector, get=dask.multiprocessing.get)
+
+    return outfiles_collector
+
 def find_clusters_by_threshold(weighted_edge_list,
+                               date,
                                thresholds=[1],
-                               working_directory=None):
+                               working_directory=None,
+                               output_directory=None
+                               ):
     """
     The information we have from the network contains not just structure,
     but weights. These weights tell us how frequently individuals recognize
@@ -169,47 +157,78 @@ def find_clusters_by_threshold(weighted_edge_list,
     clusters: dask DataFrame
 
     """
-    clusters_collector = []
+    cluster_file_collector = []
     for threshold in thresholds:
-        unweighted = weighted_edge_list[weighted_edge_list['Count'] >= threshold]
-        clusters = find_clusters(unweighted[['W1', 'W2']], working_directory)
-        clusters = clusters.assign(threshold=threshold)
-        clusters_collector.append(clusters)
+        unweighted = weighted_edge_list[weighted_edge_list['Count'] >= threshold][['W1','W2']]
 
-    clusters = pd.concat(clusters_collector, ignore_index=True)
+        th_working_directory = working_directory + '/' + str(threshold)
+        os.makedirs(th_working_directory, exist_ok=True)
 
-    return clusters
+        run_cluster_algorithm(unweighted, th_working_directory)
+
+        th_output_directory = output_directory + '/' + str(threshold)
+        os.makedirs(th_output_directory, exist_ok=True)
+
+        process_cluster_algorithm_output(th_working_directory, th_output_directory, date)
+
+        #
+        #     clusters = find_clusters(unweighted[['W1', 'W2']], working_directory)
+        #     clusters = clusters.assign(threshold=threshold)
+        #     clusters_collector.append(clusters)
+        #
+        # clusters = pd.concat(clusters_collector, ignore_index=True)
+        #
+        # return clusters
 
 
-def build_cluster_db(weighted_edge_list,
-                     output_globstring,
+def build_cluster_db(weighted_edge_list_files,
+                     intermediate_files_directory,
+                     output_files_directory,
+                     dates,
                      thresholds=[1]):
     """
-    need to separate by date, then get the clusters dataframe, then add
-    the date parameter, then create a unique id by hashing the data, then
-    store in hdf
-
 
     Parameters
     ----------
-    weighted_edge_list: pandas or dask dataframe
-    output_globstring:
-    thresholds
+    weighted_edge_list_files: list of filenames
+        should be in the same order as 'dates', and these should be
+        consecutive ascending
+    intermediate_files_directory: root directory where directories for
+        intermediate file dates will be created
+        no trailing slash
+        e.g. '../working/test'
+    output_files_globstring:
+        where output files should be located
+        csv extension
+        e.g. '../working/test/test_clusters_*.csv'
+    dates: list of integers 20150615 style
+    thresholds: list of integers
+        one entry for each threshold that you want clusters calculated for
 
-    Returns
-    -------
-    clusters: dataframe
     """
 
     collector = []
-    for date in np.array(weighted_edge_list.Date.unique()):
-        selection = weighted_edge_list[weighted_edge_list.Date == date]
-        clusters = find_clusters_by_threshold(weighted_edge_list=selection,
-                                              thresholds=thresholds)
-        clusters = clusters.reset_index(drop=True)
-        clusters.index = map(lambda x: int(str(date) + str(x)), clusters.index)
-        clusters.to_csv(output_globstring.replace('*', str(date)))
-        collector.append(clusters)
+    for w_el_file, date in zip(weighted_edge_list_files, dates):
+        w_el = pd.read_csv(w_el_file)
+
+        working_directory = intermediate_files_directory + '/' + str(date)
+        os.makedirs(working_directory, exist_ok=True)
+
+        date_output_directory = output_files_directory + '/' + str(date)
+        os.makedirs(date_output_directory, exist_ok=True)
+
+        cluster_files = find_clusters_by_threshold(
+            weighted_edge_list=w_el,
+            thresholds=thresholds,
+            working_directory=working_directory,
+            output_directory=date_output_directory,
+            date=date)
+
+        # clusters = clusters.reset_index(drop=True)
+        # clusters.index = map(lambda x: int(str(date) + str(x)), clusters.index)
+        # output_file = output_files_globstring.replace('*', str(date))
+        # clusters.to_csv(output_file)
+        # collector.append(output_file)
 
     return collector
 

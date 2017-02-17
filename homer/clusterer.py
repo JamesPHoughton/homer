@@ -102,7 +102,7 @@ def read_COS_output_file(infile_name, outfile_name, mapping, cluster_id_base):
 lazy_read_output = delayed(read_COS_output_file)
 
 
-def process_cluster_algorithm_output(cos_raw_dir, cluster_dir, date):
+def process_cluster_algorithm_output(cos_raw_dir, cluster_dir, date, threshold):
     # read the mapping file created by 'maximal_cliques'
     map_filename = glob.glob(cos_raw_dir + '/*.map')
 
@@ -120,9 +120,12 @@ def process_cluster_algorithm_output(cos_raw_dir, cluster_dir, date):
         for infile in community_files:
             k = os.path.basename(infile).rstrip('_communities.txt')
             outfile = cluster_dir + '/' + k + '_named_communities.csv'
-            cluster_id_base = '__%s_%s' % (date, k)
+            cluster_id_base = '__%s_%s_%s' % (date, k, str(threshold))
             dask_collector.append(lazy_read_output(infile, outfile, mapping, cluster_id_base))
-            outfiles_collector.append(outfile)
+            outfiles_collector.append({'k':k, 'date':date,
+                                       'threshold': threshold,
+                                       'file': outfile})
+
         dask.compute(*dask_collector, get=dask.multiprocessing.get)
 
     return outfiles_collector
@@ -169,16 +172,10 @@ def find_clusters_by_threshold(weighted_edge_list,
         th_output_directory = output_directory + '/' + str(threshold)
         os.makedirs(th_output_directory, exist_ok=True)
 
-        process_cluster_algorithm_output(th_working_directory, th_output_directory, date)
-
-        #
-        #     clusters = find_clusters(unweighted[['W1', 'W2']], working_directory)
-        #     clusters = clusters.assign(threshold=threshold)
-        #     clusters_collector.append(clusters)
-        #
-        # clusters = pd.concat(clusters_collector, ignore_index=True)
-        #
-        # return clusters
+        outfiles = process_cluster_algorithm_output(th_working_directory, th_output_directory,
+                                                    date, threshold)
+        cluster_file_collector = cluster_file_collector + outfiles
+    return cluster_file_collector
 
 
 def build_cluster_db(weighted_edge_list_files,
@@ -224,13 +221,10 @@ def build_cluster_db(weighted_edge_list_files,
             output_directory=date_output_directory,
             date=date)
 
-        # clusters = clusters.reset_index(drop=True)
-        # clusters.index = map(lambda x: int(str(date) + str(x)), clusters.index)
-        # output_file = output_files_globstring.replace('*', str(date))
-        # clusters.to_csv(output_file)
-        # collector.append(output_file)
+        collector = collector + cluster_files
 
     return collector
+
 
 
 def build_transition_cluster_db(weighted_edge_list,

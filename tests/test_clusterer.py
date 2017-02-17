@@ -32,13 +32,8 @@ class TestClusterer(unittest.TestCase):
             dates=dates,
             thresholds=thresholds)
 
+        self.assertGreater(len(cluster_files), 0)
 
-
-        # uw_el = dd.read_csv('resources/unweighted_edgelist_sample_small.txt', sep=' ')
-        # clusters = clusterer.find_clusters(uw_el)
-        # self.assertIsInstance(clusters, pd.DataFrame)
-        # self.assertIn('k', clusters.columns)
-        # self.assertIn('Set', clusters.columns)
 
     def test_traverse_thresholds(self):
         from homer.homer.clusterer import build_cluster_db

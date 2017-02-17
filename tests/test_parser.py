@@ -37,8 +37,8 @@ class TestFileParsing(unittest.TestCase):
         df = pd.read_csv(output_files[0])
         self.assertGreater(len(df), 2)
 
-        #for file in glob.glob('../working/test/*'):
-        #    os.remove(file)
+        for file in glob.glob('../working/test/*'):
+            os.remove(file)
 
     def test_parse_hashtags_only(self):
         """basic functionality """

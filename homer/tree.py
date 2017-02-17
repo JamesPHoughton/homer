@@ -187,7 +187,7 @@ def compute_tree(clusters, relations, transitions, tree_filename):
     # put clusters in a tree
     root = Cluster('__root__')
     for ID, row in clusters.iterrows():
-        new = Cluster(contents='_'+str(ID),
+        new = Cluster(contents=str(ID),
                       k=row['k'],
                       w=row['threshold'],
                       date=row['Date'])

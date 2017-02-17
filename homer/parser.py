@@ -174,10 +174,13 @@ def build_weighted_edgelist_db(tw_file_globstring,
 
     Parameters
     ----------
-    tw_file_globstring
+    tw_file_globstring: globstring
+        path and name to files
     intermediate_files_globstring: string
         csv file name with an astrisk
+        '/parsing/posts_int_*.csv'
     output_files_globstring
+        '/parsing/posts_*.csv'
     languages
     dates: list of integers 20150615 style
         this is to initialize the counters, so we don't have to infer dates (which can take time
@@ -188,7 +191,14 @@ def build_weighted_edgelist_db(tw_file_globstring,
     Returns
     -------
 
+    Outputs
+    -------
+    Two progress bars show, one for creating the intermediate files,
+    the other for compiling them
+
     """
+
+    # Todo: should create intermediate and output directories if none exist
 
     intermediate_files = process_raw_tw(tw_file_globstring,
                                         intermediate_files_globstring,

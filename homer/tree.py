@@ -22,7 +22,7 @@ class Cluster(object):
 
         self.k_children = []
         # self.w_children = []
-        # self.k_parents = []
+        self.k_parents = []
         # self.t_parents = []
         self.tomorrow = []
         self.p_tomorrow = []
@@ -94,6 +94,8 @@ class Cluster(object):
             'ptm': [float(p) for p in self.p_tomorrow]
         })
 
+
+
     # ###### Drawing Functions ######
     text_properties = {'size': 12,
                        'fontname': 'sans-serif',
@@ -119,15 +121,20 @@ class Cluster(object):
 
         return self.height, self.width
 
-    def draw(self, ax, center, bottom):
+    def draw(self, ax, center, bottom, highlight_words={}):
         if self.height is None or self.width is None or self.child_bottoms is None:
             self.compute_size()
 
         if self.is_leaf:
+            if self.contents in highlight_words:
+                self.text_properties['color'] = highlight_words[self.contents]
+            else:
+                self.text_properties['color'] = 'k'
+
             ax.text(center, bottom, self.contents,
                     transform=None, **self.text_properties)
         else:
-            [child.draw(ax, center, bottom + child_bottom)
+            [child.draw(ax, center, bottom + child_bottom, highlight_words)
              for child, child_bottom in zip(self.k_children, self.child_bottoms)]
             ax.add_patch(plt.Rectangle((center - .5 * self.width, bottom),
                                        self.width, self.height - self.pts_buffer / 2,
@@ -298,17 +305,34 @@ def connect(ax,
 
 
 def draw_series(cluster, n_days,
-                spacing=150):
+                spacing=150,
+                highlight_words={}):
     dpi = mpl.rcParams['figure.dpi']
 
     cluster_list = [cluster]
     for d in range(n_days):
         cluster_list.append(cluster_list[-1].tomorrow[np.argmax(cluster_list[-1].p_tomorrow)])
 
-    heights, widths = zip(*[cl.compute_size() for cl in cluster_list])
+    # sort the first level of clusters. good enough for now.
+    for col in range(len(cluster_list)-1):
+        sorted_children = []
+        for child in cluster_list[col].k_children:
+            for i in reversed(np.argsort(child.p_tomorrow)):
+                if child.tomorrow[i] in cluster_list[col+1].k_children:
+                    sorted_children.append(child.tomorrow[i])
+                    break
 
-    fig_height = np.max(heights) / dpi + 1
-    fig_width = (0.5 * (widths[0] + widths[-1]) + n_days * spacing) / dpi + 1
+        sorted_children += list(set(cluster_list[col+1].k_children) - set(sorted_children))
+        cluster_list[col + 1].k_children_orig = cluster_list[col + 1].k_children
+        cluster_list[col + 1].k_children = sorted_children
+
+
+
+    heights, widths = zip(*[cl.compute_size() for cl in cluster_list])
+    dates = [cl.date for cl in cluster_list]
+
+    fig_height = np.max(heights) / dpi + 6
+    fig_width = (0.5 * (widths[0] + widths[-1]) + n_days * spacing) / dpi + 4
 
     fig = plt.figure(figsize=(fig_width, fig_height))
     ax = fig.add_axes([0., 0., 1., 1.])
@@ -316,7 +340,12 @@ def draw_series(cluster, n_days,
     for col in range(len(cluster_list)):
         center = .5 * dpi + .5 * widths[0] + spacing * col
         bottom = .5 * (fig_height * dpi - heights[col])
-        cluster_list[col].draw(ax, center, bottom)
+        cluster_list[col].draw(ax, center, bottom, highlight_words)
+        ax.text(center, bottom - 15, dates[col],
+                transform=None, size=12,
+                fontname='sans-serif',
+                horizontalalignment='center')
+
 
         if col < n_days:
             tm_center = .5 * dpi + .5 * widths[0] + spacing * (col + 1)
@@ -326,3 +355,4 @@ def draw_series(cluster, n_days,
                     cluster_list[col], center, bottom,
                     cluster_list[col + 1], tm_center, tm_bottom,
                     p=np.max(cluster_list[col].p_tomorrow))
+    return fig

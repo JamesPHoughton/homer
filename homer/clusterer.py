@@ -226,10 +226,12 @@ def build_cluster_db(weighted_edge_list_files,
     return collector
 
 
-
-def build_transition_cluster_db(weighted_edge_list,
-                                output_globstring,
-                                thresholds=[1]):
+def build_transition_cluster_db(weighted_edge_list_files,
+                                intermediate_files_directory,
+                                output_files_directory,
+                                dates,
+                                thresholds=[1],
+                                ):
     """ Identifies clusters formed from edgelists representing
     two consecutive days, returning the clusters that are formed
     from the intersection of those days conversations.
@@ -239,16 +241,25 @@ def build_transition_cluster_db(weighted_edge_list,
     """
 
     collector = []
-    dates = np.array(weighted_edge_list.Date.unique())
 
-    for d1, d2 in zip(dates[:-1], dates[1:]):
-        selection = weighted_edge_list[int(d1) <= weighted_edge_list.Date <= int(d2)]
+    for d1, w_el_1, d2, w_el_2 in zip(dates[:-1], weighted_edge_list_files[:-1],
+                                      dates[1:], weighted_edge_list_files[1:]):
+        w_el = pd.concat([pd.read_csv(w_el_1), pd.read_csv(w_el_2)])
 
-        clusters = find_clusters_by_threshold(selection,
-                                              thresholds=thresholds)
-        clusters = clusters.reset_index(drop=True)
-        clusters.index = map(lambda x: int(str(d1) + str(d2) + str(x)), clusters.index)
-        clusters.to_csv(output_globstring.replace('*', str(d1) + '_' + str(d2)))
-        collector.append(clusters)
+        working_directory = intermediate_files_directory + '/' + str(d1)+'_'+str(d2)
+        os.makedirs(working_directory, exist_ok=True)
+
+        date_output_directory = output_files_directory + '/' + str(d1)+'_'+str(d2)
+        os.makedirs(date_output_directory, exist_ok=True)
+
+        cluster_files = find_clusters_by_threshold(
+            weighted_edge_list=w_el,
+            thresholds=thresholds,
+            working_directory=working_directory,
+            output_directory=date_output_directory,
+            date=str(d1)+'_'+str(d2)
+        )
+
+        collector = collector + cluster_files
 
     return collector

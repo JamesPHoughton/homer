@@ -237,12 +237,36 @@ def compute_tree(clusters, relations, transitions, tree_filename):
 
 
 def load_tree(tree_filename):
+    # with gzip.open(tree_filename, 'rb') as f:
+    #     line = f.readline()
+    #     info = json.loads(line.decode())
+    #     root = Cluster(contents=info['cn'], k=info['k'],
+    #                    w=info['w'], date=info['dt'], is_leaf=info['lf'])
+    #     root.k_children = info['kch']
+    #     for line in f:
+    #         info = json.loads(line.decode())
+    #         node = Cluster(contents=info['cn'], k=info['k'],
+    #                        w=info['w'], date=info['dt'], is_leaf=info['lf'])
+    #         node.k_children = info['kch']
+    #         node.tomorrow = info['tm']
+    #         node.p_tomorrow = info['ptm']
+    #         root.insert(node)
+    #
+    # for node in walk_tree(root):
+    #     node.k_children = [root.find(x) for x in node.k_children]
+    #     node.tomorrow = [root.find(x) for x in node.tomorrow]
+    #
+    # return root
+
+    elements = {}
     with gzip.open(tree_filename, 'rb') as f:
         line = f.readline()
         info = json.loads(line.decode())
         root = Cluster(contents=info['cn'], k=info['k'],
                        w=info['w'], date=info['dt'], is_leaf=info['lf'])
         root.k_children = info['kch']
+        elements[info['cn']] = root
+
         for line in f:
             info = json.loads(line.decode())
             node = Cluster(contents=info['cn'], k=info['k'],
@@ -250,13 +274,13 @@ def load_tree(tree_filename):
             node.k_children = info['kch']
             node.tomorrow = info['tm']
             node.p_tomorrow = info['ptm']
-            root.insert(node)
+            elements[str(info['cn'])] = node
 
-    for node in walk_tree(root):
-        node.k_children = [root.find(x) for x in node.k_children]
-        node.tomorrow = [root.find(x) for x in node.tomorrow]
+    for name, node in elements.items():
+        node.k_children = [elements[x] for x in node.k_children]
+        node.tomorrow = [elements[x] for x in node.tomorrow]
 
-    return root
+    return elements
 
 
 def connect(ax,
